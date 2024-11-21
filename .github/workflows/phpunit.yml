@@ -1,18 +1,18 @@
 name: PHPUnit tests
 
-on: [push, pull_request]
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
 
 jobs:
   run:
     runs-on: 'ubuntu-latest'
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         include:
-          - php: '7.1'
-            phpseclib: '^2.0'
-            composer: 'composer:v1'
-            coverage: none
           - php: '7.2'
             phpseclib: '^2.0'
             composer: 'composer:v1'
@@ -37,29 +37,31 @@ jobs:
             phpseclib: '^3.0'
             composer: 'composer:v2'
             coverage: none
-    services:
-      rabbitmq:
-        # 3.8.10 and later versions has enabled TLSv1.3 by default which is not supported by PHP images
-        # TLSv1.3 can be disabled by using configuration file, but not environment variables
-        image: rabbitmq:3.8.9-management
-        ports:
-          - 5671:5671
-          - 5672:5672
-          - 15671:15671
-          - 15672:15672
-        volumes:
-          - ${{ github.workspace }}:/src
-        env:
-            RABBITMQ_SSL_CACERTFILE: /src/tests/certs/ca_certificate.pem
-            RABBITMQ_SSL_CERTFILE: /src/tests/certs/server_certificate.pem
-            RABBITMQ_SSL_KEYFILE: /src/tests/certs/server_key.pem
-            RABBITMQ_SSL_VERIFY: verify_peer
-            RABBITMQ_SSL_FAIL_IF_NO_PEER_CERT: 0
+          - php: '8.2'
+            phpseclib: '^3.0'
+            composer: 'composer:v2'
+            coverage: none
+          - php: '8.3'
+            phpseclib: '^3.0'
+            composer: 'composer:v2'
+            coverage: none
+          - php: '8.4'
+            phpseclib: '^3.0'
+            composer: 'composer:v2'
+            coverage: none
 
     name: PHP ${{ matrix.php }} + phpseclib ${{ matrix.phpseclib }}
+    env:
+      TOXIPROXY_HOST: localhost
+      TOXIPROXY_AMQP_TARGET: php-amqplib-rabbitmq
+      TOXIPROXY_AMQP_PORT: 5673
     steps:
     - name: Checkout
-      uses: actions/checkout@v2
+      uses: actions/checkout@v4
+
+    - name: Start RabbitMQ and Toxiproxy
+      id: start-rabbitmq
+      run: ${{ github.workspace }}/.ci/ubuntu/gha-setup.sh
 
     - name: Install PHP
       uses: shivammathur/setup-php@v2
@@ -72,9 +74,6 @@ jobs:
     - name: Check PHP info
       run: php tests/phpinfo.php
 
-    - name: Start broker service
-      run: docker restart ${{ job.services.rabbitmq.id }}
-
     - name: Composer install
       run: composer require --prefer-dist --no-progress --no-suggest phpseclib/phpseclib ${{ matrix.phpseclib }}
 
@@ -82,19 +81,34 @@ jobs:
       run: php ./tests/wait_broker.php
 
     - name: PHPUnit tests
-      run: ./vendor/bin/phpunit --exclude-group proxy
+      run: ./vendor/bin/phpunit --verbose --debug
       if: matrix.coverage == 'none'
 
     - name: PHPUnit tests + coverage
-      run: ./vendor/bin/phpunit --exclude-group proxy --coverage-clover=coverage.xml
+      run: ./vendor/bin/phpunit --verbose --debug --coverage-clover=coverage.xml
       if: matrix.coverage != 'none'
+
+    - name: Check for errors in RabbitMQ logs
+      run: ${{ github.workspace}}/.ci/ubuntu/gha-log-check.sh
+
+    - name: Maybe collect Toxiproxy logs
+      if: failure()
+      run: docker logs proxy > ${{ github.workspace }}/tests/log/toxiproxy.log
+
+    - name: Maybe upload RabbitMQ logs
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: rabbitmq-logs-php-amqplib-${{ matrix.php }}
+        path: ${{ github.workspace }}/tests/log/
 
     - name: Upload Codecov coverage
       if: matrix.coverage != 'none'
-      uses: codecov/codecov-action@v1
+      uses: codecov/codecov-action@v3
       with:
+        token: ${{ secrets.CODECOV_TOKEN }}
         file: './coverage.xml'
-        fail_ci_if_error: true
+        fail_ci_if_error: false
 
     - name: Upload Scrutinizer coverage
       if: matrix.coverage != 'none'

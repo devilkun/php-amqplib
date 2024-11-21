@@ -14,20 +14,23 @@ abstract class AbstractConnectionTest extends TestCaseCompat
 {
     public static $blocked = false;
 
-    protected function conection_create(
+    protected function connection_create(
         string $type = 'stream',
         string $host = HOST,
         int $port = PORT,
         array $options = array()
     ): AbstractConnection {
         $timeout = $options['timeout'] ?? 1;
+        $lazy = $options['lazy'] ?? false;
         $config = new AMQPConnectionConfig();
-        $config->setIsLazy(false);
+        $config->setIsLazy($lazy);
         if ($type === 'ssl') {
             $config->setIoType(AMQPConnectionConfig::IO_TYPE_STREAM);
             $config->setIsSecure(true);
             $config->setNetworkProtocol($options['protocol'] ?? 'ssl');
+            $config->setSslCryptoMethod($options['ssl']['crypto_method'] ?? null);
             $config->setSslCaCert($options['ssl']['cafile'] ?? null);
+            $config->setSslCaPath($options['ssl']['capath'] ?? null);
             $config->setSslCert($options['ssl']['local_cert'] ?? null);
             $config->setSslKey($options['ssl']['local_pk'] ?? null);
             $config->setSslVerify($options['ssl']['verify_peer'] ?? null);
@@ -44,9 +47,12 @@ abstract class AbstractConnectionTest extends TestCaseCompat
         $config->setReadTimeout($timeout);
         $config->setWriteTimeout($timeout);
         $config->setConnectionTimeout($options['connectionTimeout'] ?? $timeout);
+        $config->setSendBufferSize(16384);
 
         $connection = AMQPConnectionFactory::create($config);
-        $this->assertTrue($connection->isConnected());
+        if (!$lazy) {
+            $this->assertTrue($connection->isConnected());
+        }
 
         return $connection;
     }
@@ -65,7 +71,7 @@ abstract class AbstractConnectionTest extends TestCaseCompat
      */
     protected function channel_create($connectionType, $options = [])
     {
-        $connection = $this->conection_create($connectionType, HOST, PORT, $options);
+        $connection = $this->connection_create($connectionType, HOST, PORT, $options);
         $channel = $connection->channel();
         $this->assertTrue($channel->is_open());
 
@@ -78,8 +84,12 @@ abstract class AbstractConnectionTest extends TestCaseCompat
      */
     protected function create_proxy($name = 'amqp_connection')
     {
+        $host = trim(getenv('TOXIPROXY_AMQP_TARGET'));
+        if (empty($host)) {
+            $host = HOST;
+        }
         $proxy = new ToxiProxy($name, $this->get_toxiproxy_host());
-        $proxy->open(HOST, PORT, $this->get_toxiproxy_amqp_port());
+        $proxy->open($host, PORT, $this->get_toxiproxy_amqp_port());
 
         return $proxy;
     }

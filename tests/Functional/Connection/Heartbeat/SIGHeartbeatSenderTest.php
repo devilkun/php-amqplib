@@ -29,7 +29,7 @@ class SIGHeartbeatSenderTest extends AbstractConnectionTest
 
     protected function setUpCompat()
     {
-        $this->connection = $this->conection_create(
+        $this->connection = $this->connection_create(
             'stream',
             HOST,
             PORT,
@@ -49,18 +49,6 @@ class SIGHeartbeatSenderTest extends AbstractConnectionTest
         }
         $this->sender = null;
         $this->connection = null;
-    }
-
-    /**
-     * @test
-     */
-    public function register_should_fail_with_closed_connection()
-    {
-        $this->expectException(AMQPRuntimeException::class);
-        $this->expectExceptionMessage('Unable to register heartbeat sender, connection is not active');
-
-        $this->connection->close();
-        $this->sender->register();
     }
 
     /**

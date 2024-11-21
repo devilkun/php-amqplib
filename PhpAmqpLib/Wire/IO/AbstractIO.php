@@ -2,14 +2,19 @@
 
 namespace PhpAmqpLib\Wire\IO;
 
+use PhpAmqpLib\Connection\AMQPConnectionConfig;
 use PhpAmqpLib\Exception\AMQPConnectionClosedException;
 use PhpAmqpLib\Exception\AMQPHeartbeatMissedException;
 use PhpAmqpLib\Exception\AMQPIOWaitException;
+use PhpAmqpLib\Exception\AMQPRuntimeException;
 use PhpAmqpLib\Wire\AMQPWriter;
 
 abstract class AbstractIO
 {
     const BUFFER_SIZE = 8192;
+
+    /** @var null|AMQPConnectionConfig */
+    protected $config;
 
     /** @var string */
     protected $host;
@@ -41,7 +46,7 @@ abstract class AbstractIO
     /** @var int|float */
     protected $last_write;
 
-    /** @var array|null */
+    /** @var \ErrorException|null */
     protected $last_error;
 
     /** @var bool */
@@ -51,7 +56,7 @@ abstract class AbstractIO
      * @param int $len
      * @return string
      * @throws \PhpAmqpLib\Exception\AMQPIOException
-     * @throws \PhpAmqpLib\Exception\AMQPRuntimeException
+     * @throws AMQPRuntimeException
      * @throws \PhpAmqpLib\Exception\AMQPSocketException
      * @throws \PhpAmqpLib\Exception\AMQPTimeoutException
      * @throws \PhpAmqpLib\Exception\AMQPConnectionClosedException
@@ -76,8 +81,9 @@ abstract class AbstractIO
      * @param int|null $sec
      * @param int $usec
      * @return int
-     * @throws \PhpAmqpLib\Exception\AMQPIOException
-     * @throws \PhpAmqpLib\Exception\AMQPRuntimeException
+     * @throws AMQPIOWaitException
+     * @throws AMQPRuntimeException
+     * @throws AMQPConnectionClosedException
      */
     public function select(?int $sec, int $usec = 0)
     {
@@ -87,7 +93,7 @@ abstract class AbstractIO
             $result = $this->do_select($sec, $usec);
             $this->throwOnError();
         } catch (\ErrorException $e) {
-            throw new AMQPIOWaitException($e->getMessage(), $e->getCode(), $e);
+            throw new AMQPIOWaitException($e->getMessage(), $e->getCode(), $e->getPrevious());
         } finally {
             $this->restoreErrorHandler();
         }
@@ -116,14 +122,24 @@ abstract class AbstractIO
      * Set ups the connection.
      * @return void
      * @throws \PhpAmqpLib\Exception\AMQPIOException
-     * @throws \PhpAmqpLib\Exception\AMQPRuntimeException
+     * @throws AMQPRuntimeException
      */
     abstract public function connect();
 
     /**
+     * Set connection params connection tune(negotiation).
+     * @param int $heartbeat
+     */
+    public function afterTune(int $heartbeat): void
+    {
+        $this->heartbeat = $heartbeat;
+        $this->initial_heartbeat = $heartbeat;
+    }
+
+    /**
      * Heartbeat logic: check connection health here
      * @return void
-     * @throws \PhpAmqpLib\Exception\AMQPRuntimeException
+     * @throws AMQPRuntimeException
      */
     public function check_heartbeat()
     {
@@ -143,7 +159,7 @@ abstract class AbstractIO
     /**
      * @throws \PhpAmqpLib\Exception\AMQPHeartbeatMissedException
      */
-    protected function checkBrokerHeartbeat()
+    protected function checkBrokerHeartbeat(): void
     {
         if ($this->heartbeat > 0 && ($this->last_read > 0 || $this->last_write > 0)) {
             $lastActivity = $this->getLastActivity();
@@ -173,6 +189,7 @@ abstract class AbstractIO
      */
     public function disableHeartbeat()
     {
+        $this->initial_heartbeat = $this->heartbeat;
         $this->heartbeat = 0;
 
         return $this;
@@ -212,14 +229,10 @@ abstract class AbstractIO
 
     protected function throwOnError(): void
     {
-        if ($this->last_error !== null) {
-            throw new \ErrorException(
-                $this->last_error['errstr'],
-                0,
-                $this->last_error['errno'],
-                $this->last_error['errfile'],
-                $this->last_error['errline']
-            );
+        if ($this->last_error instanceof \ErrorException) {
+            $error = $this->last_error;
+            $this->last_error = null;
+            throw $error;
         }
     }
 
@@ -235,20 +248,16 @@ abstract class AbstractIO
      * @param  string $errstr
      * @param  string $errfile
      * @param  int $errline
-     * @param  array $errcontext
      * @return void
      */
-    public function error_handler($errno, $errstr, $errfile, $errline, $errcontext = null)
+    public function error_handler($errno, $errstr, $errfile, $errline): void
     {
         // throwing an exception in an error handler will halt execution
-        //   set the last error and continue
-        $this->last_error = compact('errno', 'errstr', 'errfile', 'errline', 'errcontext');
+        // collect error continue
+        $this->last_error = new \ErrorException($errstr, $errno, 1, $errfile, $errline, $this->last_error);
     }
 
-    /**
-     * @return bool
-     */
-    protected function isPcntlSignalEnabled()
+    protected function isPcntlSignalEnabled(): bool
     {
         return extension_loaded('pcntl')
             && function_exists('pcntl_signal_dispatch')

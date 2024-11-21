@@ -41,9 +41,6 @@ final class SIGHeartbeatSender extends AbstractSignalHeartbeatSender
             throw new AMQPRuntimeException('Unable to re-register heartbeat sender');
         }
 
-        if (!$this->connection->isConnected()) {
-            throw new AMQPRuntimeException('Unable to register heartbeat sender, connection is not active');
-        }
         $timeout = $this->connection->getHeartbeat();
 
         if ($timeout > 0) {
@@ -84,7 +81,7 @@ final class SIGHeartbeatSender extends AbstractSignalHeartbeatSender
         if(!$pid) {
             while (true){
                 sleep($interval);
-                posix_kill($parent, SIGUSR1);
+                posix_kill($parent, $this->signal);
             }
         } else {
             $this->childPid = $pid;

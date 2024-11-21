@@ -8,6 +8,7 @@ use PhpAmqpLib\Exception\AMQPConnectionClosedException;
 use PhpAmqpLib\Exception\AMQPHeartbeatMissedException;
 use PhpAmqpLib\Message\AMQPMessage;
 use PhpAmqpLib\Tests\Functional\AbstractConnectionTest;
+use PhpAmqpLib\Tests\Functional\ToxiProxy;
 
 /**
  * @group connection
@@ -40,7 +41,7 @@ class ConnectionClosedTest extends AbstractConnectionTest
             'keepalive' => $keepalive,
         );
         /** @var AbstractConnection $connection */
-        $connection = $this->conection_create(
+        $connection = $this->connection_create(
             $type,
             $proxy->getHost(),
             $proxy->getPort(),
@@ -73,7 +74,7 @@ class ConnectionClosedTest extends AbstractConnectionTest
      * @group proxy
      * @testWith ["stream", 1024]
      *           ["stream", 32768]
-     *           ["socket", 32768]
+     *           ["socket", 102400]
      * @covers \PhpAmqpLib\Wire\IO\StreamIO::write()
      * @covers \PhpAmqpLib\Wire\IO\SocketIO::write()
      *
@@ -84,12 +85,13 @@ class ConnectionClosedTest extends AbstractConnectionTest
     {
         $proxy = $this->create_proxy();
 
-        /** @var AbstractConnection $connection */
-        $connection = $this->conection_create(
+        $connection = $this->connection_create(
             $type,
             $proxy->getHost(),
             $proxy->getPort()
         );
+
+
 
         $channel = $connection->channel();
         $this->assertTrue($channel->is_open());
@@ -101,16 +103,21 @@ class ConnectionClosedTest extends AbstractConnectionTest
         );
 
         $exception = null;
-        // block proxy connection
+        // drop proxy connection
         $proxy->close();
         unset($proxy);
 
-        try {
-            $channel->basic_publish($message, $exchange_name, $queue_name);
-        } catch (\PHPUnit_Exception $exception) {
-            throw $exception;
-        } catch (\Exception $exception) {
-        }
+        // send data frames until buffer gets full
+        $retry = 0;
+        do {
+            try {
+                $channel->basic_publish($message, $exchange_name, $queue_name);
+            } catch (\PHPUnit_Exception $exception) {
+                throw $exception;
+            } catch (\Exception $exception) {
+                break;
+            }
+        } while (!$exception && ++$retry < 100);
 
         $this->assertInstanceOf(AMQPConnectionClosedException::class, $exception);
         $this->assertEquals(SOCKET_EPIPE, $exception->getCode());
@@ -228,7 +235,7 @@ class ConnectionClosedTest extends AbstractConnectionTest
         $timeout = 1;
         $proxy = $this->create_proxy();
         /** @var AbstractConnection $connection */
-        $connection = $this->conection_create(
+        $connection = $this->connection_create(
             $type,
             $proxy->getHost(),
             $proxy->getPort(),
@@ -240,28 +247,114 @@ class ConnectionClosedTest extends AbstractConnectionTest
 
         $this->queue_bind($channel, $exchange_name = 'test_exchange_broken', $queue_name);
         $message = new AMQPMessage(
-            str_repeat('0', 1024 * 32), // 32kb fills up buffer completely on most OS
+            str_repeat('0', 1024 * 100), // 32kb fills up buffer completely on most OS
             ['delivery_mode' => AMQPMessage::DELIVERY_MODE_NON_PERSISTENT]
         );
         $channel->basic_publish($message, $exchange_name, $queue_name);
 
-        // close proxy and wait longer than timeout
-        unset($proxy);
+        // drop proxy connection and wait longer than timeout
+        $proxy->close();
         sleep($timeout);
         usleep(100000);
         $proxy = $this->create_proxy();
 
         $exception = null;
-        try {
-            $channel->basic_publish($message, $exchange_name, $queue_name);
-        } catch (\Exception $exception) {
-        }
+        // send data frames until buffer gets full
+        $retry = 0;
+        do {
+            try {
+                $channel->basic_publish($message, $exchange_name, $queue_name);
+            } catch (\PHPUnit_Exception $exception) {
+                throw $exception;
+            } catch (\Exception $exception) {
+                break;
+            }
+        } while (!$exception && ++$retry < 100);
 
+        $proxy->close();
         unset($proxy);
 
         $this->assertInstanceOf(AMQPConnectionClosedException::class, $exception);
         $this->assertGreaterThan(0, $exception->getCode());
         $this->assertChannelClosed($channel);
         $this->assertConnectionClosed($connection);
+    }
+
+    /**
+     * Try to close and reopen connection with two channels.
+     *
+     * @test
+     * @small
+     * @group connection
+     * @group proxy
+     * @testWith ["stream"]
+     *            ["socket"]
+     * @covers \PhpAmqpLib\Wire\IO\StreamIO::write()
+     * @covers \PhpAmqpLib\Wire\IO\SocketIO::write()
+     *
+     * @param string $type
+     */
+    public function must_throw_exception_after_connection_was_restored_with_two_channels($type)
+    {
+        $timeout = 1;
+
+        // Create proxy part
+        $host = trim(getenv('TOXIPROXY_AMQP_TARGET'));
+        if (empty($host)) {
+            $host = HOST;
+        }
+        $proxy = new ToxiProxy('amqp_connection', $this->get_toxiproxy_host());
+        $proxy->open($host, PORT, $this->get_toxiproxy_amqp_port());
+
+        /** @var AbstractConnection $connection */
+        $connection = $this->connection_create(
+            $type,
+            $proxy->getHost(),
+            $proxy->getPort(),
+            array('timeout' => $timeout)
+        );
+
+        $channel = $connection->channel();
+        $anotherChannel = $connection->channel();
+
+        $this->assertTrue($channel->is_open());
+        $this->assertTrue($anotherChannel->is_open());
+
+        $this->queue_bind($channel, $exchange_name = 'test_exchange_broken', $queue_name);
+        $message = new AMQPMessage(
+            'test',
+            ['delivery_mode' => AMQPMessage::DELIVERY_MODE_NON_PERSISTENT]
+        );
+        $channel->basic_publish($message, $exchange_name, $queue_name);
+
+        // drop proxy connection and wait longer than timeout
+        $proxy->close();
+        sleep($timeout);
+        usleep(100000);
+        // Reopen proxy
+        $proxy->open($host, PORT, $this->get_toxiproxy_amqp_port());
+
+        $retry = 0;
+        $exception = null;
+        do {
+            try {
+                $channel->basic_publish($message, $exchange_name, $queue_name);
+            } catch (\PHPUnit_Exception $exception) {
+                throw $exception;
+            } catch (\Exception $exception) {
+                break;
+            }
+        } while (!$exception && ++$retry < 100);
+
+        $this->assertInstanceOf(AMQPConnectionClosedException::class, $exception);
+        $this->assertGreaterThan(0, $exception->getCode());
+        $this->assertChannelClosed($channel);
+
+        // Now lets reconnect
+        $connection->reconnect();
+
+        // Both old channels must be closed
+        $this->assertChannelClosed($channel);
+        $this->assertChannelClosed($anotherChannel);
     }
 }
