@@ -27,6 +27,17 @@ class SocketIOTest extends TestCase
     /**
      * @test
      */
+    public function connect_ipv6()
+    {
+        $socketIO = new SocketIO(HOST6, PORT, 20, true, 20, 9);
+        $socketIO->connect();
+        $ready = $socketIO->select(0, 0);
+        $this->assertEquals(0, $ready);
+    }
+
+    /**
+     * @test
+     */
     public function connect_with_invalid_credentials()
     {
         $this->expectException(\PhpAmqpLib\Exception\AMQPIOException::class);
@@ -91,7 +102,7 @@ class SocketIOTest extends TestCase
         $property = new \ReflectionProperty(SocketIO::class, 'sock');
         $property->setAccessible(true);
 
-        $socket = new SocketIO('0.0.0.0', PORT, 0.1, 0.1, null, false, 0);
+        $socket = new SocketIO('0.0.0.0', PORT, 0.1, false, 0.1, 0);
         $property->setValue($socket, null);
 
         $socket->select(0, 0);

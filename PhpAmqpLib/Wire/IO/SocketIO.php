@@ -2,6 +2,7 @@
 
 namespace PhpAmqpLib\Wire\IO;
 
+use PhpAmqpLib\Connection\AMQPConnectionConfig;
 use PhpAmqpLib\Exception\AMQPConnectionClosedException;
 use PhpAmqpLib\Exception\AMQPIOException;
 use PhpAmqpLib\Exception\AMQPSocketException;
@@ -11,7 +12,7 @@ use PhpAmqpLib\Helper\SocketConstants;
 
 class SocketIO extends AbstractIO
 {
-    /** @var null|resource */
+    /** @var null|resource|\Socket */
     private $sock;
 
     /**
@@ -21,6 +22,7 @@ class SocketIO extends AbstractIO
      * @param bool $keepalive
      * @param int|float|null $write_timeout if null defaults to read timeout
      * @param int $heartbeat how often to send heartbeat. 0 means off
+     * @param null|AMQPConnectionConfig $config
      */
     public function __construct(
         $host,
@@ -28,9 +30,11 @@ class SocketIO extends AbstractIO
         $read_timeout = 3,
         $keepalive = false,
         $write_timeout = null,
-        $heartbeat = 0
+        $heartbeat = 0,
+        ?AMQPConnectionConfig $config = null
     ) {
-        $this->host = $host;
+        $this->config = $config;
+        $this->host = str_replace(['[', ']'], '', $host);
         $this->port = $port;
         $this->read_timeout = (float)$read_timeout;
         $this->write_timeout = (float)($write_timeout ?: $read_timeout);
@@ -56,7 +60,7 @@ class SocketIO extends AbstractIO
      */
     public function connect()
     {
-        $this->sock = socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
+        $this->sock = socket_create(!$this->isIpv6() ? AF_INET : AF_INET6, SOCK_STREAM, SOL_TCP);
 
         list($sec, $uSec) = MiscHelper::splitSecondsMicroseconds($this->write_timeout);
         socket_set_option($this->sock, SOL_SOCKET, SO_SNDTIMEO, array('sec' => $sec, 'usec' => $uSec));
@@ -84,6 +88,9 @@ class SocketIO extends AbstractIO
 
         socket_set_block($this->sock);
         socket_set_option($this->sock, SOL_TCP, TCP_NODELAY, 1);
+        if ($this->config && $this->config->getSendBufferSize() > 0) {
+            socket_set_option($this->sock, SOL_SOCKET, SO_SNDBUF, $this->config->getSendBufferSize());
+        }
 
         if ($this->keepalive) {
             $this->enable_keepalive();
@@ -93,7 +100,8 @@ class SocketIO extends AbstractIO
     }
 
     /**
-     * @inheritdoc
+     * @deprecated
+     * @return null|resource|\Socket
      */
     public function getSocket()
     {
@@ -179,9 +187,16 @@ class SocketIO extends AbstractIO
         while ($written < $len) {
             $this->setErrorHandler();
             try {
-                $this->select_write();
-                $buffer = mb_substr($data, $written, self::BUFFER_SIZE, 'ASCII');
-                $result = socket_write($this->sock, $buffer, self::BUFFER_SIZE);
+                $result = 0;
+                if ($this->select_write()) {
+                    // if data is smaller than buffer - no need to cut part of it
+                    if ($len <= self::BUFFER_SIZE) {
+                        $buffer = $data;
+                    } else {
+                        $buffer = mb_substr($data, $written, self::BUFFER_SIZE, 'ASCII');
+                    }
+                    $result = socket_write($this->sock, $buffer);
+                }
                 $this->throwOnError();
             } catch (\ErrorException $e) {
                 $code = socket_last_error($this->sock);
@@ -271,7 +286,7 @@ class SocketIO extends AbstractIO
     /**
      * @throws \PhpAmqpLib\Exception\AMQPIOException
      */
-    protected function enable_keepalive()
+    protected function enable_keepalive(): void
     {
         if (!defined('SOL_SOCKET') || !defined('SO_KEEPALIVE')) {
             throw new AMQPIOException('Can not enable keepalive: SOL_SOCKET or SO_KEEPALIVE is not defined');
@@ -283,7 +298,7 @@ class SocketIO extends AbstractIO
     /**
      * @inheritdoc
      */
-    public function error_handler($errno, $errstr, $errfile, $errline, $errcontext = null)
+    public function error_handler($errno, $errstr, $errfile, $errline): void
     {
         $constants = SocketConstants::getInstance();
         // socket_select warning that it has been interrupted by a signal - EINTR
@@ -292,7 +307,7 @@ class SocketIO extends AbstractIO
             return;
         }
 
-        parent::error_handler($errno, $errstr, $errfile, $errline, $errcontext);
+        parent::error_handler($errno, $errstr, $errfile, $errline);
     }
 
     /**
@@ -302,5 +317,16 @@ class SocketIO extends AbstractIO
     {
         parent::setErrorHandler();
         socket_clear_error($this->sock);
+    }
+
+    private function isIpv6(): bool
+    {
+        $ipv6 = filter_var($this->host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6);
+
+        if ($ipv6 !== false || checkdnsrr($this->host, 'AAAA')) {
+            return true;
+        }
+
+        return false;
     }
 }

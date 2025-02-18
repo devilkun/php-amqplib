@@ -1,5 +1,6 @@
 name: Update changelog
 on:
+  workflow_dispatch:
   release:
     types:
       - published
@@ -7,17 +8,24 @@ jobs:
   run:
     name: Update changelog
     runs-on: ubuntu-latest
+    env:
+      CHANGELOG_GITHUB_TOKEN: ${{ secrets.CHANGELOG_GITHUB_TOKEN }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
         with:
           ref: master
+      - uses: actions/cache/restore@v3
+        id: cache-restore
+        with:
+          key: changelog-generator
+          path: build/github-changelog-http-cache
       - name: Generate changelog
         uses: addnab/docker-run-action@v3
         with:
           image: githubchangeloggenerator/github-changelog-generator
-          options: "--env SRC_PATH=/github/workspace --workdir /github/workspace"
-          run: "github_changelog_generator --user php-amqplib --project php-amqplib --token ${{ secrets.GITHUB_TOKEN }}"
+          options: "-v ${{ github.workspace }}:/github/workspace --env SRC_PATH=/github/workspace --env CHANGELOG_GITHUB_TOKEN --workdir /github/workspace"
+          run: "github_changelog_generator --user php-amqplib --project php-amqplib"
       - name: Commit changes
         run: |
           git config --local user.email "action@github.com"
@@ -29,3 +37,15 @@ jobs:
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           branch: master
+      - name: Clear cache
+        if: always()
+        uses: snnaplab/delete-branch-cache-action@v1
+        with:
+          key: ${{ steps.cache-restore.outputs.cache-primary-key }}
+      - name: Save changelog cache
+        if: always()
+        uses: actions/cache/save@v3
+        with:
+          key: ${{ steps.cache-restore.outputs.cache-primary-key }}
+          path: build/github-changelog-http-cache
+

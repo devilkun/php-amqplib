@@ -12,6 +12,7 @@ final class AMQPConnectionConfig
 {
     public const AUTH_PLAIN = 'PLAIN';
     public const AUTH_AMQPPLAIN = 'AMQPLAIN';
+    public const AUTH_EXTERNAL = 'EXTERNAL';
     public const IO_TYPE_STREAM = 'stream';
     public const IO_TYPE_SOCKET = 'socket';
 
@@ -19,7 +20,7 @@ final class AMQPConnectionConfig
     private $ioType = self::IO_TYPE_STREAM;
 
     /** @var bool */
-    private $isLazy = true;
+    private $isLazy = false;
 
     /** @var string */
     private $host = '127.0.0.1';
@@ -41,6 +42,9 @@ final class AMQPConnectionConfig
 
     /** @var string */
     private $loginMethod = self::AUTH_AMQPPLAIN;
+
+    /** @var string|null */
+    private $loginResponse;
 
     /** @var string */
     private $locale = 'en_US';
@@ -66,16 +70,25 @@ final class AMQPConnectionConfig
     /** @var bool */
     private $isSecure = false;
 
-    /** @var string */
+    /**
+     * @deprecated Use sslCryptoMethod
+     * @var string
+     */
     private $networkProtocol = 'tcp';
 
     /** @var resource|null */
     private $streamContext;
 
+    /** @var int */
+    private $sendBufferSize = 0;
+
     /** @var bool */
     private $dispatchSignals = true;
 
-    /** @var string */
+    /**
+     * @var string
+     * @deprecated
+     */
     private $amqpProtocol = Wire\Constants091::VERSION;
 
     /**
@@ -86,6 +99,11 @@ final class AMQPConnectionConfig
 
     /** @var string|null */
     private $sslCaCert;
+
+    /**
+     * @var string|null
+     */
+    private $sslCaPath;
 
     /** @var string|null */
     private $sslCert;
@@ -104,6 +122,15 @@ final class AMQPConnectionConfig
 
     /** @var string|null */
     private $sslCiphers;
+
+    /** @var int|null */
+    private $sslSecurityLevel;
+
+    /** @var int|null */
+    private $sslCryptoMethod;
+
+    /** @var string */
+    private $connectionName = '';
 
     /**
      * Output all networks packets for debug purposes.
@@ -209,10 +236,27 @@ final class AMQPConnectionConfig
 
     public function setLoginMethod(string $loginMethod): void
     {
-        if ($loginMethod !== self::AUTH_PLAIN && $loginMethod !== self::AUTH_AMQPPLAIN) {
+        if (
+            $loginMethod !== self::AUTH_PLAIN
+            && $loginMethod !== self::AUTH_AMQPPLAIN
+            && $loginMethod !== self::AUTH_EXTERNAL
+        ) {
             throw new InvalidArgumentException('Unknown login method: ' . $loginMethod);
         }
+        if ($loginMethod === self::AUTH_EXTERNAL && (!empty($this->user) || !empty($this->password))) {
+            throw new InvalidArgumentException('External auth method cannot be used together with user credentials.');
+        }
         $this->loginMethod = $loginMethod;
+    }
+
+    public function getLoginResponse(): ?string
+    {
+        return $this->loginResponse;
+    }
+
+    public function setLoginResponse(string $loginResponse): void
+    {
+        $this->loginResponse = $loginResponse;
     }
 
     public function getLocale(): string
@@ -298,13 +342,27 @@ final class AMQPConnectionConfig
     public function setIsSecure(bool $isSecure): void
     {
         $this->isSecure = $isSecure;
+
+        if ($this->isSecure) {
+            $this->networkProtocol = 'tls';
+            $this->sslCryptoMethod = STREAM_CRYPTO_METHOD_ANY_CLIENT;
+        } else {
+            $this->networkProtocol = 'tcp';
+            $this->sslCryptoMethod = null;
+        }
     }
 
+    /**
+     * @deprecated Use getSslCryptoMethod()
+     */
     public function getNetworkProtocol(): string
     {
         return $this->networkProtocol;
     }
 
+    /**
+     * @deprecated Use setIsSecure() and setSslCryptoMethod()
+     */
     public function setNetworkProtocol(string $networkProtocol): void
     {
         self::assertStringNotEmpty($networkProtocol, 'network protocol');
@@ -335,6 +393,27 @@ final class AMQPConnectionConfig
         $this->streamContext = $streamContext;
     }
 
+    /**
+     * @return int
+     * @since 3.2.1
+     */
+    public function getSendBufferSize(): int
+    {
+        return $this->sendBufferSize;
+    }
+
+    /**
+     * Socket send buffer size. Set 0 to keep system default.
+     * @param int $sendBufferSize
+     * @return void
+     * @since 3.2.1
+     */
+    public function setSendBufferSize(int $sendBufferSize): void
+    {
+        self::assertGreaterOrEq($sendBufferSize, 0, 'sendBufferSize');
+        $this->sendBufferSize = $sendBufferSize;
+    }
+
     public function isSignalsDispatchEnabled(): bool
     {
         return $this->dispatchSignals;
@@ -345,11 +424,19 @@ final class AMQPConnectionConfig
         $this->dispatchSignals = $dispatchSignals;
     }
 
+    /**
+     * @return string
+     * @deprecated
+     */
     public function getAMQPProtocol(): string
     {
         return $this->amqpProtocol;
     }
 
+    /**
+     * @param string $protocol
+     * @deprecated
+     */
     public function setAMQPProtocol(string $protocol): void
     {
         if ($protocol !== Wire\Constants091::VERSION && $protocol !== Wire\Constants080::VERSION) {
@@ -376,6 +463,16 @@ final class AMQPConnectionConfig
     public function setSslCaCert(?string $sslCaCert): void
     {
         $this->sslCaCert = $sslCaCert;
+    }
+
+    public function getSslCaPath(): ?string
+    {
+        return $this->sslCaPath;
+    }
+
+    public function setSslCaPath(?string $sslCaPath): void
+    {
+        $this->sslCaPath = $sslCaPath;
     }
 
     public function getSslCert(): ?string
@@ -406,6 +503,10 @@ final class AMQPConnectionConfig
     public function setSslVerify(?bool $sslVerify): void
     {
         $this->sslVerify = $sslVerify;
+
+        if (!$this->sslVerify) {
+            $this->setSslVerifyName(false);
+        }
     }
 
     public function getSslVerifyName(): ?bool
@@ -438,6 +539,26 @@ final class AMQPConnectionConfig
         $this->sslCiphers = $sslCiphers;
     }
 
+    public function getSslSecurityLevel(): ?int
+    {
+        return $this->sslSecurityLevel;
+    }
+
+    public function setSslSecurityLevel(?int $sslSecurityLevel): void
+    {
+        $this->sslSecurityLevel = $sslSecurityLevel;
+    }
+
+    public function getSslCryptoMethod(): ?int
+    {
+        return $this->sslCryptoMethod;
+    }
+
+    public function setSslCryptoMethod(?int $sslCryptoMethod): void
+    {
+        $this->sslCryptoMethod = $sslCryptoMethod;
+    }
+
     public function isDebugPackets(): bool
     {
         return $this->debugPackets;
@@ -466,5 +587,21 @@ final class AMQPConnectionConfig
         if ($value < $limit) {
             throw new InvalidArgumentException(sprintf('Parameter "%s" must be greater than zero', $param));
         }
+    }
+
+    /**
+     * @return string
+     */
+    public function getConnectionName(): string
+    {
+        return $this->connectionName;
+    }
+
+    /**
+     * @param string $connectionName
+     */
+    public function setConnectionName(string $connectionName): void
+    {
+        $this->connectionName = $connectionName;
     }
 }

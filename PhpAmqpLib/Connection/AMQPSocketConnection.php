@@ -45,7 +45,7 @@ class AMQPSocketConnection extends AbstractConnection
             throw new \InvalidArgumentException('channel RPC timeout must not be greater than I/O read timeout');
         }
 
-        $io = new SocketIO($host, $port, $read_timeout, $keepalive, $write_timeout, $heartbeat);
+        $io = new SocketIO($host, $port, $read_timeout, $keepalive, $write_timeout, $heartbeat, $config);
 
         parent::__construct(
             $user,
@@ -64,7 +64,8 @@ class AMQPSocketConnection extends AbstractConnection
     }
 
     /**
-     * @deprecated Use ConnectionFactory
+     * @deprecated Use AmqpConnectionFactory
+     * @throws \Exception
      */
     protected static function try_create_connection($host, $port, $user, $password, $vhost, $options)
     {
@@ -84,6 +85,8 @@ class AMQPSocketConnection extends AbstractConnection
                                $options['write_timeout'] : 3;
         $heartbeat = isset($options['heartbeat']) ?
                            $options['heartbeat'] : 0;
+        $channel_rpc_timeout = isset($options['channel_rpc_timeout']) ?
+                                    $options['channel_rpc_timeout'] : 0.0;
         return new static(
             $host,
             $port,
@@ -97,7 +100,8 @@ class AMQPSocketConnection extends AbstractConnection
             $read_timeout,
             $keepalive,
             $write_timeout,
-            $heartbeat
+            $heartbeat,
+            $channel_rpc_timeout
         );
     }
 }

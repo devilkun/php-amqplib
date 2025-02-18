@@ -51,6 +51,7 @@ abstract class AMQPAbstractCollection implements \Iterator, \ArrayAccess
      * Default behaviour is to use rabbitMQ compatible field-set
      * Define AMQP_STRICT_FLD_TYPES=true to use strict AMQP instead
      * @var array<int, string>
+     * @deprecated
      */
     private static $types_080 = array(
         self::T_INT_LONG => 'I',
@@ -113,7 +114,7 @@ abstract class AMQPAbstractCollection implements \Iterator, \ArrayAccess
      */
     protected $data = array();
 
-    public function __construct(array $data = null)
+    public function __construct(?array $data = null)
     {
         if (!empty($data)) {
             $this->data = $this->encodeCollection($data);
@@ -376,6 +377,7 @@ abstract class AMQPAbstractCollection implements \Iterator, \ArrayAccess
 
     /**
      * @return string
+     * @deprecated
      */
     final public static function getProtocol()
     {

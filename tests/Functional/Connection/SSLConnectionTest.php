@@ -16,13 +16,24 @@ class SSLConnectionTest extends AbstractConnectionTest
      */
     public function secure_connection_default_params($options)
     {
-        $connection = $this->conection_create('ssl', HOST, 5671, $options);
+        $port = $options['port'] ?? 5671;
+        $connection = $this->connection_create('ssl', HOST, $port, $options);
         self::assertTrue($connection->isConnected());
         $channel = $connection->channel();
         self::assertTrue($channel->is_open());
 
         $channel->close();
         $connection->close();
+    }
+
+    /**
+     * @test
+     * @dataProvider secure_connection_params
+     */
+    public function secure_connection_default_params_with_keepalive($options)
+    {
+        $options['keepalive'] = true;
+        $this->secure_connection_default_params($options);
     }
 
     public function secure_connection_params()
@@ -59,6 +70,29 @@ class SSLConnectionTest extends AbstractConnectionTest
             ]
         ];
         $sets[] = [$options];
+
+        // #3 capath option
+        $options = [
+            'ssl' => [
+                'capath' => $certsPath . '/hashed/',
+                'verify_peer_name' => false,
+            ],
+        ];
+        $sets[] = [
+            $options
+        ];
+
+        // #4 non-TLS options
+        $options = ['port' => 5672];
+        $sets[] = [
+            $options
+        ];
+
+        // #5 TLS crypto method
+        $options[] = ['ssl' => ['crypto_method' => STREAM_CRYPTO_METHOD_ANY_CLIENT]];
+        $sets[] = [
+            $options
+        ];
 
         return $sets;
     }

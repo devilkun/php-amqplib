@@ -22,8 +22,9 @@ class AMQPStreamConnection extends AbstractConnection
      * @param bool $keepalive
      * @param int $heartbeat
      * @param float $channel_rpc_timeout
-     * @param string|null $ssl_protocol
+     * @param string|AMQPConnectionConfig|null $ssl_protocol @deprecated
      * @param AMQPConnectionConfig|null $config
+     * @throws \Exception
      */
     public function __construct(
         $host,
@@ -44,6 +45,15 @@ class AMQPStreamConnection extends AbstractConnection
         $ssl_protocol = null,
         ?AMQPConnectionConfig $config = null
     ) {
+        if ($ssl_protocol !== null && $ssl_protocol instanceof AMQPConnectionConfig === false) {
+            trigger_error(
+                '$ssl_protocol parameter is deprecated, use stream_context_set_option($context, \'ssl\', \'crypto_method\', $ssl_protocol) instead (see https://www.php.net/manual/en/function.stream-socket-enable-crypto.php for possible values)',
+                E_USER_DEPRECATED
+            );
+        } elseif ($ssl_protocol instanceof AMQPConnectionConfig) {
+            $config = $ssl_protocol;
+        }
+
         if ($channel_rpc_timeout > $read_write_timeout) {
             throw new \InvalidArgumentException('channel RPC timeout must not be greater than I/O read-write timeout');
         }
@@ -55,8 +65,7 @@ class AMQPStreamConnection extends AbstractConnection
             $read_write_timeout,
             $context,
             $keepalive,
-            $heartbeat,
-            $ssl_protocol
+            $heartbeat
         );
 
         parent::__construct(
@@ -79,7 +88,8 @@ class AMQPStreamConnection extends AbstractConnection
     }
 
     /**
-     * @deprecated Use ConnectionFactory
+     * @deprecated Use AmqpConnectionFactory
+     * @throws \Exception
      */
     protected static function try_create_connection($host, $port, $user, $password, $vhost, $options)
     {
@@ -101,6 +111,8 @@ class AMQPStreamConnection extends AbstractConnection
                            $options['keepalive'] : false;
         $heartbeat = isset($options['heartbeat']) ?
                            $options['heartbeat'] : 60;
+        $channel_rpc_timeout = isset($options['channel_rpc_timeout']) ?
+                                    $options['channel_rpc_timeout'] : 0.0;
         return new static(
             $host,
             $port,
@@ -115,7 +127,8 @@ class AMQPStreamConnection extends AbstractConnection
             $read_write_timeout,
             $context,
             $keepalive,
-            $heartbeat
+            $heartbeat,
+            $channel_rpc_timeout
         );
     }
 }

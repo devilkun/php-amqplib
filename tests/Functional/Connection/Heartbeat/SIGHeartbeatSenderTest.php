@@ -29,7 +29,7 @@ class SIGHeartbeatSenderTest extends AbstractConnectionTest
 
     protected function setUpCompat()
     {
-        $this->connection = $this->conection_create(
+        $this->connection = $this->connection_create(
             'stream',
             HOST,
             PORT,
@@ -49,18 +49,6 @@ class SIGHeartbeatSenderTest extends AbstractConnectionTest
         }
         $this->sender = null;
         $this->connection = null;
-    }
-
-    /**
-     * @test
-     */
-    public function register_should_fail_with_closed_connection()
-    {
-        $this->expectException(AMQPRuntimeException::class);
-        $this->expectExceptionMessage('Unable to register heartbeat sender, connection is not active');
-
-        $this->connection->close();
-        $this->sender->register();
     }
 
     /**
@@ -105,6 +93,7 @@ class SIGHeartbeatSenderTest extends AbstractConnectionTest
 
     /**
      * @test
+     * @runInSeparateProcess
      */
     public function alarm_sig_should_be_registered_when_conn_is_writing()
     {
@@ -113,7 +102,7 @@ class SIGHeartbeatSenderTest extends AbstractConnectionTest
             ->disableOriginalConstructor()
             ->getMockForAbstractClass();
 
-        $connection->expects($this->exactly(3))->method('isConnected')->willReturn(true);
+        $connection->expects($this->atLeast(2))->method('isConnected')->willReturn(true);
         $connection->expects($this->once())->method('getHeartbeat')->willReturn($this->heartbeatTimeout);
         $connection->expects($this->exactly(2))
             ->method('isWriting')
@@ -132,4 +121,26 @@ class SIGHeartbeatSenderTest extends AbstractConnectionTest
 
         $sender->unregister();
     }
+
+    /**
+     * @test
+     * @runInSeparateProcess
+     * @outputBuffering disabled
+     * @covers \PhpAmqpLib\Connection\Heartbeat\SIGHeartbeatSender::unregister()
+     */
+     public function child_process_must_be_terminated_after_unregister()
+     {
+         $property = new \ReflectionProperty(get_class($this->sender), 'childPid');
+         $property->setAccessible(true);
+
+         $this->sender->register();
+         $pid = $property->getValue($this->sender);
+         self::assertGreaterThan(0, $pid);
+
+         $this->sender->unregister();
+
+         $result = pcntl_waitpid($pid, $status, WNOHANG);
+         self::assertEquals(-1, $result);
+         self::assertEquals(0, $status);
+     }
 }
